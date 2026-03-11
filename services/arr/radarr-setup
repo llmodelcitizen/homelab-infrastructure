@@ -1,0 +1,93 @@
+#!/bin/bash
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+VARS_FILE="$SCRIPT_DIR/../../vars.yml"
+RADARR_CONFIG="/opt/arr/radarr/config/config.xml"
+RADARR_API="http://localhost:7878/api/v3"
+
+BASE_DOMAIN=$(grep '^domain:' "$VARS_FILE" | awk '{print $2}')
+export QBIT_DOMAIN="qbit.${BASE_DOMAIN}"
+export RADARR_DOMAIN="radarr.${BASE_DOMAIN}"
+
+compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
+
+radarr_curl() {
+    compose exec -T radarr curl -sf \
+        -H "X-Api-Key: $API_KEY" \
+        -H "Content-Type: application/json" \
+        "$@"
+}
+
+# Create media directories
+mkdir -p /opt/arr/data/media/movies
+chown -R 1000:1000 /opt/arr/data/media
+
+# Check radarr is running
+if ! compose ps --status running 2>/dev/null | grep -q radarr; then
+    echo "Error: radarr container is not running. Start it with: ./arrctl up -d"
+    exit 1
+fi
+
+# Wait for config to be generated
+echo "Waiting for Radarr config..."
+for _ in $(seq 1 30); do
+    if [ -f "$RADARR_CONFIG" ] && grep -q '<ApiKey>' "$RADARR_CONFIG" 2>/dev/null; then
+        break
+    fi
+    sleep 2
+done
+
+API_KEY=$(grep -oP '(?<=<ApiKey>)[^<]+' "$RADARR_CONFIG")
+if [ -z "$API_KEY" ]; then
+    echo "Error: could not read API key from $RADARR_CONFIG"
+    exit 1
+fi
+
+# Set authentication via config.xml (API is blocked until auth is configured)
+echo "Setting authentication to forms (Authelia handles auth)..."
+sed -i 's|<AuthenticationMethod>None</AuthenticationMethod>|<AuthenticationMethod>Forms</AuthenticationMethod>|' "$RADARR_CONFIG"
+sed -i 's|<AuthenticationRequired>Enabled</AuthenticationRequired>|<AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>|' "$RADARR_CONFIG"
+
+# Restart Radarr to pick up config changes
+echo "Restarting Radarr..."
+compose restart radarr
+
+# Wait for API to be ready
+echo "Waiting for Radarr API..."
+for _ in $(seq 1 30); do
+    if radarr_curl "$RADARR_API/system/status" >/dev/null 2>&1; then
+        break
+    fi
+    sleep 2
+done
+
+# Prompt for qBittorrent password
+read -rsp "qBittorrent password: " QBIT_PASS
+echo
+QBIT_PASS_JSON=$(printf '%s' "$QBIT_PASS" | jq -Rs .)
+
+# 1. Add qBittorrent download client
+echo "Adding qBittorrent download client..."
+SCHEMA=$(radarr_curl "$RADARR_API/downloadclient/schema" \
+    | jq '.[] | select(.implementation == "QBittorrent")')
+PAYLOAD=$(echo "$SCHEMA" | jq \
+    --arg pass "$QBIT_PASS" \
+    '.name = "qBittorrent" |
+     .enable = true |
+     (.fields[] | select(.name == "host")).value = "gluetun" |
+     (.fields[] | select(.name == "port")).value = 8080 |
+     (.fields[] | select(.name == "username")).value = "admin" |
+     (.fields[] | select(.name == "password")).value = $pass |
+     (.fields[] | select(.name == "movieCategory")).value = "radarr"')
+radarr_curl -X POST "$RADARR_API/downloadclient" -d "$PAYLOAD" >/dev/null
+echo "done"
+
+# 2. Add root folder
+echo "Adding root folder..."
+radarr_curl -X POST "$RADARR_API/rootfolder" \
+    -d '{"path": "/data/media/movies"}' >/dev/null
+echo "done"
+
+echo "Radarr setup complete."

@@ -1,0 +1,25 @@
+services:
+  companion:
+    image: ghcr.io/bitfocus/companion/companion:latest
+    container_name: companion
+    restart: unless-stopped
+    volumes:
+      - /opt/companion:/companion
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.companion.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.companion.entrypoints=websecure"
+      - "traefik.http.routers.companion.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.companion.middlewares=authelia@docker"
+      - "traefik.http.services.companion.loadbalancer.server.port=8000"
+      - "traefik.docker.network=traefik-public"
+    ports:
+      - "16622:16622" # Companion Satellite API
+      - "16623:16623" # Companion Satellite WebSocket
+    networks:
+      - traefik-public
+      - default
+
+networks:
+  traefik-public:
+    external: true

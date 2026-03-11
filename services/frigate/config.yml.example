@@ -1,0 +1,79 @@
+mqtt:
+  enabled: false
+
+detectors:
+  coral:
+    type: edgetpu
+    device: usb
+
+birdseye:
+  enabled: true
+  mode: continuous
+
+cameras:
+  FRONT_DOOR:
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/FRONT_DOOR_SUB
+          input_args: preset-rtsp-restream
+          roles:
+            - detect
+        - path: rtsp://127.0.0.1:8554/FRONT_DOOR
+          input_args:
+            - -c:v
+            - hevc_cuvid
+          roles:
+            - record
+    detect:
+      fps: 5
+    record:
+      enabled: true
+      retain:
+        days: 2
+        mode: all
+      alerts:
+        retain:
+          days: 400
+      detections:
+        retain:
+          days: 30
+    snapshots:
+      enabled: true
+      timestamp: true
+      bounding_box: true
+      retain:
+        default: 120
+
+objects:
+  track:
+    - person
+    - car
+    - dog
+    - cat
+    - bicycle
+    - motorcycle
+
+go2rtc:
+  streams:
+    FRONT_DOOR:
+      - rtsp://admin:CAMERA_PASSWORD@192.0.2.100:554/Streaming/channels/101
+    FRONT_DOOR_SUB:
+      - rtsp://admin:CAMERA_PASSWORD@192.0.2.100:554/Streaming/channels/102
+
+detect:
+  enabled: true
+version: 0.16-0
+semantic_search:
+  enabled: true
+  model_size: large
+face_recognition:
+  enabled: true
+  model_size: large
+lpr:
+  enabled: true
+camera_groups:
+  all_cameras:
+    order: 1
+    icon: LuTarget
+    cameras:
+      - FRONT_DOOR

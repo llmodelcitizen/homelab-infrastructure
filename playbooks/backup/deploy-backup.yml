@@ -1,0 +1,126 @@
+---
+# Deploy backup service to target hosts
+
+- name: Deploy backup service
+  hosts: myserver
+  become: true
+
+  vars_files:
+    - ../../vars.yml
+    - backup_sources.yml
+
+  tasks:
+    - name: Verify running on myserver
+      ansible.builtin.assert:
+        that:
+          - myserver_ip in ansible_all_ipv4_addresses
+        fail_msg: "This playbook must be run on myserver ({{ myserver_ip }})"
+
+    - name: Install required packages
+      ansible.builtin.apt:
+        name:
+          - rsync
+          - python3-yaml
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create backup directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+      loop:
+        - /opt/backupservice
+        - /var/log/backup
+
+    - name: Deploy backup script
+      ansible.builtin.copy:
+        src: backup.py
+        dest: /opt/backupservice/backup.py
+        mode: "0755"
+        owner: root
+        group: root
+
+    - name: Deploy backup configuration
+      ansible.builtin.template:
+        src: backup_config.yml.j2
+        dest: /opt/backupservice/config.yml
+        mode: "0600"
+        owner: root
+        group: root
+
+    - name: Deploy systemd service unit
+      ansible.builtin.template:
+        src: backup.service.j2
+        dest: /etc/systemd/system/backup.service
+        mode: "0644"
+        owner: root
+        group: root
+      notify: Reload systemd
+
+    - name: Deploy systemd timer unit
+      ansible.builtin.template:
+        src: backup.timer.j2
+        dest: /etc/systemd/system/backup.timer
+        mode: "0644"
+        owner: root
+        group: root
+      notify: Reload systemd
+
+    - name: Deploy logrotate configuration
+      ansible.builtin.template:
+        src: logrotate-backup.j2
+        dest: /etc/logrotate.d/backup
+        mode: "0644"
+        owner: root
+        group: root
+
+    - name: Flush handlers before enabling timer
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start backup timer
+      ansible.builtin.systemd:
+        name: backup.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Check if Vault is accessible
+      ansible.builtin.command:
+        cmd: vault status
+      environment:
+        VAULT_ADDR: http://127.0.0.1:8200
+      register: vault_status
+      changed_when: false
+      failed_when: false
+
+    - name: Warn if Vault is not accessible
+      ansible.builtin.debug:
+        msg: >
+          WARNING: Vault is not accessible on this host.
+          Ensure Vault is running and a valid token exists at /root/.vault-token
+          before running backups.
+      when: vault_status.rc != 0
+
+    - name: Verify backup script syntax
+      ansible.builtin.command:
+        cmd: python3 -m py_compile /opt/backupservice/backup.py
+      changed_when: false
+
+    - name: Display timer status
+      ansible.builtin.command:
+        cmd: systemctl status backup.timer --no-pager
+      register: timer_status
+      changed_when: false
+
+    - name: Show timer status
+      ansible.builtin.debug:
+        var: timer_status.stdout_lines
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true

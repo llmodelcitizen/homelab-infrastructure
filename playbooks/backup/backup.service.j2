@@ -1,0 +1,29 @@
+# Backup service unit
+# Managed by Ansible - do not edit manually
+
+[Unit]
+Description=Backup directories to NAS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/backupservice/backup.py --config /opt/backupservice/config.yml
+Environment=VAULT_ADDR=http://127.0.0.1:8200
+
+# Security hardening
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/log/backup
+
+# Timeout after 8 hours
+TimeoutStartSec=28800
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=backup
+
+[Install]
+WantedBy=multi-user.target

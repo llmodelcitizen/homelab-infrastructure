@@ -1,0 +1,219 @@
+---
+# wireguard-server.yml - Set up WireGuard server on VPS for VPN tunneling
+#
+# Configures a WireGuard server with NAT and port forwarding so that
+# qBittorrent traffic on myserver is routed through the VPS IP. Client
+# credentials are stored in Vault for the Gluetun sidecar container.
+#
+# Usage:
+#   ansible-playbook playbooks/wg-torrent/wireguard-server.yml
+
+- name: Set up WireGuard server
+  hosts: vps
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - ../../vars.yml
+
+  handlers:
+    - name: Restart WireGuard
+      ansible.builtin.systemd:
+        name: wg-quick@wg0
+        state: restarted
+      listen: restart wireguard
+
+  tasks:
+    - name: Gather controller facts
+      ansible.builtin.setup:
+      delegate_to: localhost
+      delegate_facts: true
+      run_once: true
+      become: false
+
+    - name: Verify running from myserver (Vault access required)
+      ansible.builtin.assert:
+        that:
+          - myserver_ip in hostvars['localhost']['ansible_all_ipv4_addresses']
+        fail_msg: "This playbook must be run from myserver ({{ myserver_ip }}) for Vault access"
+      run_once: true
+
+    - name: Remove existing keys for regeneration
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/wireguard/server_privatekey
+        - /etc/wireguard/server_publickey
+        - /etc/wireguard/client_privatekey
+        - /etc/wireguard/client_publickey
+      when: regenerate_keys | default(false) | bool
+
+    - name: Install WireGuard
+      ansible.builtin.apt:
+        name:
+          - wireguard
+          - iptables
+          - netcat-openbsd
+          - ufw
+        state: present
+        update_cache: true
+
+    - name: Generate server private key
+      ansible.builtin.shell: wg genkey > /etc/wireguard/server_privatekey
+      args:
+        creates: /etc/wireguard/server_privatekey
+      no_log: true
+
+    - name: Set server private key permissions
+      ansible.builtin.file:
+        path: /etc/wireguard/server_privatekey
+        mode: "0600"
+
+    - name: Generate server public key
+      ansible.builtin.shell: cat /etc/wireguard/server_privatekey | wg pubkey > /etc/wireguard/server_publickey
+      args:
+        creates: /etc/wireguard/server_publickey
+
+    - name: Generate client private key
+      ansible.builtin.shell: wg genkey > /etc/wireguard/client_privatekey
+      args:
+        creates: /etc/wireguard/client_privatekey
+      no_log: true
+
+    - name: Set client private key permissions
+      ansible.builtin.file:
+        path: /etc/wireguard/client_privatekey
+        mode: "0600"
+
+    - name: Generate client public key
+      ansible.builtin.shell: cat /etc/wireguard/client_privatekey | wg pubkey > /etc/wireguard/client_publickey
+      args:
+        creates: /etc/wireguard/client_publickey
+
+    - name: Read server private key
+      ansible.builtin.slurp:
+        src: /etc/wireguard/server_privatekey
+      register: server_private_key
+      no_log: true
+
+    - name: Read client public key
+      ansible.builtin.slurp:
+        src: /etc/wireguard/client_publickey
+      register: client_public_key
+
+    - name: Deploy wg0 configuration
+      ansible.builtin.copy:
+        dest: /etc/wireguard/wg0.conf
+        mode: "0600"
+        content: |
+          [Interface]
+          PrivateKey = {{ server_private_key.content | b64decode | trim }}
+          Address = 10.10.0.1/24
+          ListenPort = 51820
+
+          PostUp = iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -o {{ ansible_default_ipv4.interface }} -j MASQUERADE
+          PostUp = iptables -t nat -A PREROUTING -i {{ ansible_default_ipv4.interface }} -p tcp --dport 6881 -j DNAT --to-destination 10.10.0.2:6881
+          PostUp = iptables -t nat -A PREROUTING -i {{ ansible_default_ipv4.interface }} -p udp --dport 6881 -j DNAT --to-destination 10.10.0.2:6881
+          PostUp = iptables -A FORWARD -p tcp -d 10.10.0.2 --dport 6881 -j ACCEPT
+          PostUp = iptables -A FORWARD -p udp -d 10.10.0.2 --dport 6881 -j ACCEPT
+          PostUp = iptables -A FORWARD -s 10.10.0.0/24 -j ACCEPT
+          PostUp = iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+
+          PostDown = iptables -t nat -D POSTROUTING -s 10.10.0.0/24 -o {{ ansible_default_ipv4.interface }} -j MASQUERADE
+          PostDown = iptables -t nat -D PREROUTING -i {{ ansible_default_ipv4.interface }} -p tcp --dport 6881 -j DNAT --to-destination 10.10.0.2:6881
+          PostDown = iptables -t nat -D PREROUTING -i {{ ansible_default_ipv4.interface }} -p udp --dport 6881 -j DNAT --to-destination 10.10.0.2:6881
+          PostDown = iptables -D FORWARD -p tcp -d 10.10.0.2 --dport 6881 -j ACCEPT
+          PostDown = iptables -D FORWARD -p udp -d 10.10.0.2 --dport 6881 -j ACCEPT
+          PostDown = iptables -D FORWARD -s 10.10.0.0/24 -j ACCEPT
+          PostDown = iptables -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+
+          [Peer]
+          PublicKey = {{ client_public_key.content | b64decode | trim }}
+          AllowedIPs = 10.10.0.2/32
+          PersistentKeepalive = 25
+      notify: restart wireguard
+
+    - name: Enable IP forwarding (persist)
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-wireguard.conf
+        content: "net.ipv4.ip_forward = 1\n"
+
+    - name: Enable IP forwarding (runtime)
+      ansible.builtin.command: sysctl -w net.ipv4.ip_forward=1
+      changed_when: false
+
+    - name: Set ufw default deny incoming
+      community.general.ufw:
+        direction: incoming
+        default: deny
+
+    - name: Set ufw default allow outgoing
+      community.general.ufw:
+        direction: outgoing
+        default: allow
+
+    - name: Allow SSH port
+      community.general.ufw:
+        rule: allow
+        port: "6702"
+        proto: tcp
+
+    - name: Allow WireGuard port
+      community.general.ufw:
+        rule: allow
+        port: "51820"
+        proto: udp
+
+    - name: Allow BitTorrent port (tcp)
+      community.general.ufw:
+        rule: allow
+        port: "6881"
+        proto: tcp
+
+    - name: Allow BitTorrent port (udp)
+      community.general.ufw:
+        rule: allow
+        port: "6881"
+        proto: udp
+
+    - name: Allow Tailscale direct connections
+      community.general.ufw:
+        rule: allow
+        port: "41641"
+        proto: udp
+
+    - name: Enable ufw
+      community.general.ufw:
+        state: enabled
+
+    - name: Enable and start WireGuard
+      ansible.builtin.systemd:
+        name: wg-quick@wg0
+        enabled: true
+        state: started
+
+    - name: Read client private key
+      ansible.builtin.slurp:
+        src: /etc/wireguard/client_privatekey
+      register: client_private_key
+      no_log: true
+
+    - name: Read server public key
+      ansible.builtin.slurp:
+        src: /etc/wireguard/server_publickey
+      register: server_public_key
+
+    - name: Store client credentials in Vault
+      ansible.builtin.command:
+        cmd: >-
+          vault kv put secret/wireguard
+          client_private_key={{ client_private_key.content | b64decode | trim }}
+          server_public_key={{ server_public_key.content | b64decode | trim }}
+          endpoint={{ ansible_default_ipv4.address }}
+          endpoint_port=51820
+          client_address=10.10.0.2/32
+      delegate_to: localhost
+      become: false
+      changed_when: true
+      no_log: true

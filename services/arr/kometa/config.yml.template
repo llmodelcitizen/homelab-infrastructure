@@ -1,0 +1,26 @@
+libraries:
+  Movies:
+    collection_files:
+      - default: basic
+      - default: imdb
+    overlay_files:
+      - default: resolution
+      - default: ratings
+        template_variables:
+          rating1: critic
+          rating1_image: imdb
+          rating2: audience
+          rating2_image: rt_popcorn
+    operations:
+      mass_critic_rating_update: imdb
+      mass_audience_rating_update: mdb_tomatoesaudience
+      mass_genre_update: imdb
+
+plex:
+  url: http://${PLEX_URL}
+  token: ${PLEX_TOKEN}
+
+tmdb:
+  apikey: ${TMDB_APIKEY}
+  language: en
+  region: US

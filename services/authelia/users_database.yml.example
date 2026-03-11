@@ -1,0 +1,23 @@
+users:
+    admin:
+        password: "<argon2id-hash>"
+        displayname: Admin User
+        email: user@example.com
+        groups:
+            - admins
+        given_name: ""
+        middle_name: ""
+        family_name: ""
+        nickname: ""
+        gender: ""
+        birthdate: ""
+        website: ""
+        profile: ""
+        picture: ""
+        zoneinfo: ""
+        locale: ""
+        phone_number: ""
+        phone_extension: ""
+        disabled: false
+        address: null
+        extra: {}

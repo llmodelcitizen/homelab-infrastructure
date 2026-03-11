@@ -1,0 +1,102 @@
+#!/bin/bash
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+VARS_FILE="$SCRIPT_DIR/../../vars.yml"
+PROWLARR_CONFIG="/opt/arr/prowlarr/config/config.xml"
+RADARR_CONFIG="/opt/arr/radarr/config/config.xml"
+PROWLARR_API="http://localhost:9696/api/v1"
+
+BASE_DOMAIN=$(grep '^domain:' "$VARS_FILE" | awk '{print $2}')
+export QBIT_DOMAIN="qbit.${BASE_DOMAIN}"
+export RADARR_DOMAIN="radarr.${BASE_DOMAIN}"
+export PROWLARR_DOMAIN="prowlarr.${BASE_DOMAIN}"
+
+compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
+
+prowlarr_curl() {
+    compose exec -T prowlarr curl -sf \
+        -H "X-Api-Key: $PROWLARR_KEY" \
+        -H "Content-Type: application/json" \
+        "$@"
+}
+
+# Check prowlarr is running
+if ! compose ps --status running 2>/dev/null | grep -q prowlarr; then
+    echo "Error: prowlarr container is not running. Start it with: ./arrctl up -d"
+    exit 1
+fi
+
+# Wait for Prowlarr config to be generated
+echo "Waiting for Prowlarr config..."
+for _ in $(seq 1 30); do
+    if [ -f "$PROWLARR_CONFIG" ] && grep -q '<ApiKey>' "$PROWLARR_CONFIG" 2>/dev/null; then
+        break
+    fi
+    sleep 2
+done
+
+PROWLARR_KEY=$(grep -oP '(?<=<ApiKey>)[^<]+' "$PROWLARR_CONFIG")
+if [ -z "$PROWLARR_KEY" ]; then
+    echo "Error: could not read API key from $PROWLARR_CONFIG"
+    exit 1
+fi
+
+# Read Radarr API key (radarr-setup must be run first)
+RADARR_KEY=$(grep -oP '(?<=<ApiKey>)[^<]+' "$RADARR_CONFIG")
+if [ -z "$RADARR_KEY" ]; then
+    echo "Error: could not read Radarr API key from $RADARR_CONFIG (run radarr-setup first)"
+    exit 1
+fi
+
+# Set authentication via config.xml (API is blocked until auth is configured)
+echo "Setting authentication to external (Authelia handles auth)..."
+sed -i 's|<AuthenticationMethod>None</AuthenticationMethod>|<AuthenticationMethod>External</AuthenticationMethod>|' "$PROWLARR_CONFIG"
+sed -i 's|<AuthenticationRequired>Enabled</AuthenticationRequired>|<AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>|' "$PROWLARR_CONFIG"
+
+# Restart Prowlarr to pick up config changes
+echo "Restarting Prowlarr..."
+compose restart prowlarr
+
+# Wait for Prowlarr API to be ready
+echo "Waiting for Prowlarr API..."
+for _ in $(seq 1 30); do
+    if prowlarr_curl "$PROWLARR_API/system/status" >/dev/null 2>&1; then
+        break
+    fi
+    sleep 2
+done
+
+# 1. Add Radarr as an application
+echo "Adding Radarr as application..."
+SCHEMA=$(prowlarr_curl "$PROWLARR_API/applications/schema" \
+    | jq '.[] | select(.implementation == "Radarr")')
+PAYLOAD=$(echo "$SCHEMA" | jq \
+    --arg key "$RADARR_KEY" \
+    '.name = "Radarr" |
+     .syncLevel = "fullSync" |
+     (.fields[] | select(.name == "prowlarrUrl")).value = "http://prowlarr:9696" |
+     (.fields[] | select(.name == "baseUrl")).value = "http://radarr:7878" |
+     (.fields[] | select(.name == "apiKey")).value = $key')
+prowlarr_curl -X POST "$PROWLARR_API/applications" -d "$PAYLOAD" >/dev/null
+echo "done"
+
+# 2. Configure Byparr as FlareSolverr proxy
+echo "Creating byparr tag..."
+TAG_ID=$(prowlarr_curl -X POST "$PROWLARR_API/tag" -d '{"label":"byparr"}' | jq '.id')
+
+echo "Adding Byparr as FlareSolverr proxy..."
+prowlarr_curl -X POST "$PROWLARR_API/indexerProxy" -d "{
+  \"name\": \"Byparr\",
+  \"implementation\": \"FlareSolverr\",
+  \"configContract\": \"FlareSolverrSettings\",
+  \"fields\": [
+    {\"name\": \"host\", \"value\": \"http://byparr:8191\"},
+    {\"name\": \"requestTimeout\", \"value\": 60}
+  ],
+  \"tags\": [$TAG_ID]
+}" >/dev/null
+echo "done"
+
+echo "Prowlarr setup complete."

@@ -1,0 +1,31 @@
+groups:
+  - name: disk
+    rules:
+      - alert: DiskSpaceWarning
+        expr: 100 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} * 100) > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk space warning on {{ $labels.mountpoint }}"
+          description: "{{ $labels.mountpoint }} usage is {{ printf \"%.1f\" $value }}% (threshold: 90%)"
+
+      - alert: DiskSpaceCritical
+        expr: 100 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} * 100) > 95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk space critical on {{ $labels.mountpoint }}"
+          description: "{{ $labels.mountpoint }} usage is {{ printf \"%.1f\" $value }}% (threshold: 95%)"
+
+  - name: cpu
+    rules:
+      - alert: HighCpuUsage
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ printf \"%.1f\" $value }}% for 5 minutes (threshold: 90%)"

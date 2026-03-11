@@ -1,0 +1,38 @@
+#!/bin/bash
+set -eo pipefail
+
+export VAULT_ADDR="http://127.0.0.1:8200"
+export VAULT_TOKEN=$(sudo age -d -i /root/.config/sops/age/keys.txt /root/.vault-credentials.age) || { echo "Error: failed to decrypt Vault token" >&2; exit 1; }
+vault token lookup > /dev/null 2>&1 || { echo "Error: Vault is sealed or not authenticated" >&2; exit 1; }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VARS_FILE="$SCRIPT_DIR/../../vars.yml"
+
+BASE_DOMAIN=$(grep '^domain:' "$VARS_FILE" | awk '{print $2}')
+TRAEFIK_SERVER_IP=$(grep '^myserver_ip:' "$VARS_FILE" | awk '{print $2}')
+export QBIT_DOMAIN="qbit.${BASE_DOMAIN}"
+export RADARR_DOMAIN="radarr.${BASE_DOMAIN}"
+export PROWLARR_DOMAIN="prowlarr.${BASE_DOMAIN}"
+export PLEX_DOMAIN="plex.${BASE_DOMAIN}"
+export PLEX_CLAIM="${PLEX_CLAIM:-}"
+export PLEX_URL="${TRAEFIK_SERVER_IP}:32400"
+
+# Fetch WireGuard secrets from Vault
+WG_SECRETS=$(vault kv get -format=json secret/wireguard | jq -r '.data.data')
+export WIREGUARD_PRIVATE_KEY=$(echo "$WG_SECRETS" | jq -r '.client_private_key')
+export WIREGUARD_PUBLIC_KEY=$(echo "$WG_SECRETS" | jq -r '.server_public_key')
+export VPN_ENDPOINT_IP=$(echo "$WG_SECRETS" | jq -r '.endpoint')
+export VPN_ENDPOINT_PORT=$(echo "$WG_SECRETS" | jq -r '.endpoint_port')
+export WIREGUARD_ADDRESSES=$(echo "$WG_SECRETS" | jq -r '.client_address')
+
+# Read Plex token from Plex config (set during initial claim)
+PLEX_PREFS="/opt/arr/plex/config/Library/Application Support/Plex Media Server/Preferences.xml"
+export PLEX_TOKEN=$(sed -n 's/.*PlexOnlineToken="\([^"]*\)".*/\1/p' "$PLEX_PREFS")
+
+# Fetch Kometa secrets from Vault
+export TMDB_APIKEY=$(vault kv get -format=json secret/kometa | jq -r '.data.data.tmdb_apikey')
+
+# Generate Kometa config with secrets into persistent volume
+envsubst < "$SCRIPT_DIR/kometa/config.yml.template" > /opt/arr/kometa/config/config.yml
+
+exec docker compose "$@"

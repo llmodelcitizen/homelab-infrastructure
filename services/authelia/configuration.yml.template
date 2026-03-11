@@ -1,0 +1,71 @@
+theme: oled
+default_2fa_method: totp
+
+server:
+  address: 'tcp://:9091'
+
+log:
+  level: info
+
+totp:
+  issuer: '${BASE_DOMAIN}'
+
+webauthn:
+  display_name: '${BASE_DOMAIN}'
+  selection_criteria:
+    user_verification: discouraged
+
+authentication_backend:
+  file:
+    path: /config/users_database.yml
+    password:
+      algorithm: argon2
+
+session:
+  name: authelia_session
+  inactivity: 1d
+  expiration: 1d
+  remember_me: -1
+  cookies:
+    - domain: '${BASE_DOMAIN}'
+      authelia_url: 'https://auth.${BASE_DOMAIN}'
+  redis:
+    host: redis
+    port: 6379
+
+storage:
+  local:
+    path: /data/db.sqlite3
+
+notifier:
+  smtp:
+    address: 'submissions://${SMTP_ENDPOINT}:465'
+    sender: 'Authelia <noreply@auth.${BASE_DOMAIN}>'
+
+access_control:
+  default_policy: deny
+  rules:
+    - domain: 'auth.${BASE_DOMAIN}'
+      policy: bypass
+    - domain: 'forge.${BASE_DOMAIN}'
+      policy: bypass
+    - domain: 'companion.${BASE_DOMAIN}'
+      policy: two_factor
+    - domain: 'frigate.${BASE_DOMAIN}'
+      policy: two_factor
+    - domain: 'traefik.${BASE_DOMAIN}'
+      policy: two_factor
+    - domain: 'grafana.${BASE_DOMAIN}'
+      policy: two_factor
+    - domain: 'prometheus.${BASE_DOMAIN}'
+      policy: two_factor
+    - domain: 'alertmanager.${BASE_DOMAIN}'
+      policy: two_factor
+    - domain: 'cadvisor.${BASE_DOMAIN}'
+      policy: two_factor
+    - domain: 'qbit.${BASE_DOMAIN}'
+      policy: two_factor
+    - domain: 'radarr.${BASE_DOMAIN}'
+      policy: two_factor
+    - domain: 'prowlarr.${BASE_DOMAIN}'
+      policy: two_factor

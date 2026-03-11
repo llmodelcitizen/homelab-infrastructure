@@ -1,0 +1,12 @@
+#!/bin/bash
+set -eo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VARS_FILE="$SCRIPT_DIR/../../vars.yml"
+
+# Read domain from vars.yml and construct companion subdomain
+BASE_DOMAIN=$(grep '^domain:' "$VARS_FILE" | awk '{print $2}')
+export DOMAIN="companion.${BASE_DOMAIN}"
+
+# Pass through to docker compose
+exec docker compose "$@"

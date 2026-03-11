@@ -1,0 +1,23 @@
+watch:
+  schedule: "0 6 * * *"
+  firstCheckNotif: false
+  runOnStartup: true
+
+defaults:
+  notifyOn:
+    - new
+    - update
+
+providers:
+  docker:
+    watchByDefault: true
+
+notif:
+  mail:
+    host: ${SMTP_ENDPOINT}
+    port: 587
+    ssl: false
+    username: ${SMTP_USERNAME}
+    password: ${SMTP_PASSWORD}
+    from: diun@${DOMAIN}
+    to: ${RECIPIENT_EMAIL}

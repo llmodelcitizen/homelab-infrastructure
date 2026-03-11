@@ -1,0 +1,24 @@
+#!/bin/bash
+set -eo pipefail
+
+export VAULT_ADDR="http://127.0.0.1:8200"
+export VAULT_TOKEN=$(sudo age -d -i /root/.config/sops/age/keys.txt /root/.vault-credentials.age) || { echo "Error: failed to decrypt Vault token" >&2; exit 1; }
+vault token lookup > /dev/null 2>&1 || { echo "Error: Vault is sealed or not authenticated" >&2; exit 1; }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VARS_FILE="$SCRIPT_DIR/../../vars.yml"
+
+# Read static config from vars.yml
+export ACME_EMAIL=$(grep '^recipient_email:' "$VARS_FILE" | awk '{print $2}')
+export DOMAIN=$(grep '^domain:' "$VARS_FILE" | awk '{print $2}')
+export AWS_REGION=$(grep '^aws_region:' "$VARS_FILE" | awk '{print $2}')
+export AWS_HOSTED_ZONE_ID=$(grep '^route53_zone_id:' "$VARS_FILE" | awk '{print $2}')
+
+# Fetch secrets from Vault
+SECRETS=$(vault kv get -format=json secret/traefik | jq -r '.data.data')
+
+export AWS_ACCESS_KEY_ID=$(echo "$SECRETS" | jq -r '.aws_access_key_id')
+export AWS_SECRET_ACCESS_KEY=$(echo "$SECRETS" | jq -r '.aws_secret_access_key')
+
+# Pass through to docker compose
+exec docker compose "$@"

@@ -1,0 +1,36 @@
+# Backup configuration for {{ ansible_hostname }}
+# Managed by Ansible - do not edit manually
+
+nas:
+  hostname: {{ rsync_backup_host }}
+  user: {{ rsync_backup_user }}
+
+vault:
+  addr: "http://127.0.0.1:8200"
+  secret_path: "secret/backupservice/rsync"
+  secret_key: "password"
+
+log_file: /var/log/backup/backup.log
+
+backup_sources:
+{% for source in backup_sources | default([]) %}
+  - path: {{ source.path }}
+    name: {{ source.name }}
+{% if source.share is defined %}
+    share: {{ source.share }}
+{% endif %}
+{% if source.backup_root is defined %}
+    backup_root: "{{ source.backup_root }}"
+{% endif %}
+{% if source.excludes is defined %}
+    excludes:
+{% for exclude in source.excludes %}
+      - "{{ exclude }}"
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+notifications:
+  email_on_failure: true
+  email_on_success: true
+  recipient: {{ recipient_email }}

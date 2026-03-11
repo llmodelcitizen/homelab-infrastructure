@@ -1,0 +1,114 @@
+---
+# vault-mirror.yml - Mirror AWS Secrets Manager secrets to HashiCorp Vault
+#
+# Reads credentials from AWS Secrets Manager (via SSO) and writes them to
+# Vault using the CLI. Run from myserver which has both AWS SSO and Vault access.
+#
+# Usage:
+#   ansible-playbook playbooks/vault_mirror/vault-mirror.yml
+
+- name: Mirror AWS Secrets Manager to Vault
+  hosts: localhost
+  connection: local
+  gather_facts: true
+
+  vars_files:
+    - ../../vars.yml
+
+  vars:
+    vault_addr: "http://127.0.0.1:8200"
+    smtp_credentials: "{{ lookup('amazon.aws.aws_secret', name_prefix + '-smtp-credentials', region=aws_region) | from_json }}"
+    traefik_credentials: "{{ lookup('amazon.aws.aws_secret', name_prefix + '-traefik-route53-credentials', region=aws_region) | from_json }}"
+    cloudtrail_sync_credentials: "{{ lookup('amazon.aws.aws_secret', name_prefix + '-cloudtrail-sync-credentials', region=aws_region) | from_json }}"
+
+  pre_tasks:
+    - name: Verify running on myserver
+      ansible.builtin.assert:
+        that:
+          - myserver_ip in ansible_all_ipv4_addresses
+        fail_msg: "This playbook must be run from myserver ({{ myserver_ip }})"
+
+    - name: Check Vault is reachable
+      ansible.builtin.command: vault status
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+      changed_when: false
+      register: vault_status
+      failed_when: vault_status.rc not in [0, 2]  # 2 = sealed but reachable
+
+    - name: Decrypt Vault token from age-encrypted credentials
+      ansible.builtin.command:
+        cmd: age -d -i /root/.config/sops/age/keys.txt /root/.vault-credentials.age
+      become: true
+      changed_when: false
+      no_log: true
+      register: vault_token_result
+
+    - name: Set vault_env for subsequent tasks
+      ansible.builtin.set_fact:
+        vault_env:
+          VAULT_ADDR: "{{ vault_addr }}"
+          VAULT_TOKEN: "{{ vault_token_result.stdout }}"
+      no_log: true
+
+  tasks:
+    - name: Validate SMTP credentials
+      ansible.builtin.assert:
+        that:
+          - smtp_credentials.smtp_username is defined
+          - smtp_credentials.smtp_password is defined
+          - smtp_credentials.smtp_endpoint is defined
+        fail_msg: "Secret '{{ name_prefix }}-smtp-credentials' is missing required fields"
+
+    - name: Validate traefik credentials
+      ansible.builtin.assert:
+        that:
+          - traefik_credentials.aws_access_key_id is defined
+          - traefik_credentials.aws_secret_access_key is defined
+          - traefik_credentials.aws_region is defined
+          - traefik_credentials.aws_hosted_zone_id is defined
+        fail_msg: "Secret '{{ name_prefix }}-traefik-route53-credentials' is missing required fields"
+
+    - name: Validate CloudTrail sync credentials
+      ansible.builtin.assert:
+        that:
+          - cloudtrail_sync_credentials.aws_access_key_id is defined
+          - cloudtrail_sync_credentials.aws_secret_access_key is defined
+          - cloudtrail_sync_credentials.s3_bucket is defined
+          - cloudtrail_sync_credentials.s3_prefix is defined
+        fail_msg: "Secret '{{ name_prefix }}-cloudtrail-sync-credentials' is missing required fields"
+
+    - name: Mirror SMTP credentials to Vault
+      ansible.builtin.command:
+        cmd: >-
+          vault kv put secret/smtp
+          smtp_username={{ smtp_credentials.smtp_username }}
+          smtp_password={{ smtp_credentials.smtp_password }}
+          smtp_endpoint={{ smtp_credentials.smtp_endpoint }}
+      environment: "{{ vault_env }}"
+      changed_when: true
+      no_log: true
+
+    - name: Mirror traefik credentials to Vault
+      ansible.builtin.command:
+        cmd: >-
+          vault kv put secret/traefik
+          aws_access_key_id={{ traefik_credentials.aws_access_key_id }}
+          aws_secret_access_key={{ traefik_credentials.aws_secret_access_key }}
+          aws_region={{ traefik_credentials.aws_region }}
+          aws_hosted_zone_id={{ traefik_credentials.aws_hosted_zone_id }}
+      environment: "{{ vault_env }}"
+      changed_when: true
+      no_log: true
+
+    - name: Mirror CloudTrail sync credentials to Vault
+      ansible.builtin.command:
+        cmd: >-
+          vault kv put secret/cloudtrail-sync
+          aws_access_key_id={{ cloudtrail_sync_credentials.aws_access_key_id }}
+          aws_secret_access_key={{ cloudtrail_sync_credentials.aws_secret_access_key }}
+          s3_bucket={{ cloudtrail_sync_credentials.s3_bucket }}
+          s3_prefix={{ cloudtrail_sync_credentials.s3_prefix }}
+      environment: "{{ vault_env }}"
+      changed_when: true
+      no_log: true

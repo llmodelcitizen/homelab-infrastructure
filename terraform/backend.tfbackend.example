@@ -1,0 +1,3 @@
+bucket = "<s3-bucket-name>"
+key    = "<state-file-path>"
+region = "<aws-region>"

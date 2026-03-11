@@ -1,0 +1,43 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# EDITORS
+*.swp
+*.swo
+*.swn
+*~
+
+# PYTHON
+__pycache__/
+
+# TERRAFORM
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfbackend
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+lambda.zip
+
+# ANSIBLE
+*.retry
+
+# GENERAL
+.env
+*.log
+
+# CONFIG OVERLAY
+# It is recommended that you build a private config overlay repository that mirrors this directory
+# structure, but to get started, simply duplicate and modify each of the .example files you can find.
+CLAUDE.md
+vars.yml
+hosts.ini
+playbooks/backup/backup_sources.yml
+services/authelia/users_database.yml
+services/frigate/config.yml
+services/monitoring/prometheus/alert-rules.yml
+

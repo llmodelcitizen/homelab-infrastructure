@@ -1,0 +1,18 @@
+# Set defaults
+defaults
+auth            on
+tls             on
+set_from_header on
+tls_trust_file /etc/ssl/certs/ca-certificates.crt
+logfile        /var/log/msmtp.log
+
+# AWS SES account
+account        ses
+host           {{ smtp_endpoint }}
+port           587
+from           {{ ansible_hostname }}@{{ domain }}
+user           {{ smtp_username }}
+password       {{ smtp_password }}
+
+# Set default account
+account default : ses

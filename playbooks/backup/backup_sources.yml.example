@@ -1,0 +1,38 @@
+backup_sources:
+  - path: /mnt/ssd/frigate
+    name: frigate
+    share: myshare
+  - path: /opt/frigate
+    name: opt-frigate
+    share: myshare
+    backup_root: backups
+  - path: /opt/forge
+    name: opt-forge
+    share: myshare
+    backup_root: backups
+  - path: /opt/vault
+    name: opt-vault
+    share: myshare
+    backup_root: backups
+  - path: /opt/companion
+    name: opt-companion
+    share: myshare
+    backup_root: backups
+  - path: /opt/arr
+    name: opt-arr
+    share: myshare
+    backup_root: backups
+    excludes:
+      - data/
+  - path: /opt/authelia
+    name: opt-authelia
+    share: myshare
+    backup_root: backups
+  - path: /opt/traefik
+    name: opt-traefik
+    share: myshare
+    backup_root: backups
+  - path: /opt/grafana
+    name: opt-grafana
+    share: myshare
+    backup_root: backups

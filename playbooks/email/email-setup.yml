@@ -1,0 +1,204 @@
+---
+- name: Configure email sending
+  hosts: "{{ target | default('all') }}"
+  become: true
+  vars_files:
+    - ../../vars.yml
+  vars:
+    # SMTP credentials - only resolved when needed (lazy evaluation)
+    smtp_credentials: "{{ lookup('amazon.aws.aws_secret', name_prefix + '-smtp-credentials', region=aws_region) | from_json }}"
+    smtp_username: "{{ smtp_credentials.smtp_username }}"
+    smtp_password: "{{ smtp_credentials.smtp_password }}"
+    smtp_endpoint: "{{ smtp_credentials.smtp_endpoint }}"
+    # Relay credentials - only resolved when needed (lazy evaluation)
+    relay_credentials: "{{ lookup('amazon.aws.aws_secret', name_prefix + '-email-relay-credentials', region=aws_region) | from_json }}"
+
+  tasks:
+    - name: Validate SMTP credentials
+      assert:
+        that:
+          - smtp_credentials.smtp_username is defined
+          - smtp_credentials.smtp_password is defined
+          - smtp_credentials.smtp_endpoint is defined
+        fail_msg: "Secret '{{ name_prefix }}-smtp-credentials' is missing required fields"
+      run_once: true
+      delegate_to: localhost
+      when: use_email_relay is not defined or not (use_email_relay | bool)
+
+    - name: Validate relay credentials
+      assert:
+        that:
+          - relay_credentials.api_endpoint is defined
+          - relay_credentials.api_key is defined
+        fail_msg: "Secret '{{ name_prefix }}-email-relay-credentials' is missing required fields"
+      run_once: true
+      delegate_to: localhost
+      when: use_email_relay | default(false) | bool
+
+    # --- SMTP transport (default) ---
+
+    - name: SMTP email transport
+      when: use_email_relay is not defined or not (use_email_relay | bool)
+      block:
+        - name: Install SMTP packages
+          apt:
+            name:
+              - msmtp
+              - msmtp-mta
+              - mailutils
+            state: present
+
+        - name: Create msmtp config directory
+          file:
+            path: /etc/msmtp
+            state: directory
+            mode: '0755'
+
+        - name: Configure msmtp
+          template:
+            src: msmtprc.j2
+            dest: /etc/msmtprc
+            mode: '0644'
+            owner: root
+            group: root
+          no_log: true
+
+        - name: Create mail aliases
+          copy:
+            content: |
+              # Map local users to real email addresses
+              root: {{ recipient_email }}
+              default: {{ recipient_email }}
+            dest: /etc/aliases
+            mode: '0644'
+            owner: root
+            group: root
+
+        - name: Create send-mail wrapper
+          copy:
+            content: |
+              #!/bin/bash
+              # Wrapper to send email with proper From header
+              # Usage: /usr/local/bin/send-mail "subject" "body" [recipient]
+
+              SUBJECT="$1"
+              BODY="$2"
+              RECIPIENT="${3:-{{ recipient_email }}}"
+              FROM="{{ ansible_hostname }}@{{ domain }}"
+
+              echo "$BODY" | mail -s "$SUBJECT" -a "From: $FROM" "$RECIPIENT"
+            dest: /usr/local/bin/send-mail
+            mode: '0755'
+            owner: root
+            group: root
+
+    # --- Relay transport (for hosts with blocked SMTP ports) ---
+
+    - name: Relay email transport
+      when: use_email_relay | default(false) | bool
+      block:
+        - name: Install relay dependencies
+          apt:
+            name:
+              - curl
+              - jq
+            state: present
+
+        - name: Deploy send-mail relay script
+          copy:
+            content: |
+              #!/bin/bash
+              # Send email via API Gateway relay
+              # Usage: send-mail "subject" "body" [recipient]
+
+              API_ENDPOINT="{{ relay_credentials.api_endpoint }}"
+              API_KEY="{{ relay_credentials.api_key }}"
+
+              SUBJECT="$1"
+              BODY="$2"
+              RECIPIENT="${3:-{{ recipient_email }}}"
+              FROM="{{ ansible_hostname }}@{{ domain }}"
+
+              if [ -z "$SUBJECT" ]; then
+                echo "Usage: send-mail \"subject\" \"body\" [recipient]" >&2
+                exit 1
+              fi
+
+              PAYLOAD=$(jq -n \
+                --arg subject "$SUBJECT" \
+                --arg body "$BODY" \
+                --arg to "$RECIPIENT" \
+                --arg from "$FROM" \
+                '{subject: $subject, body: $body, to: $to, from: $from}')
+
+              RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$API_ENDPOINT" \
+                -H "x-api-key: $API_KEY" \
+                -H "Content-Type: application/json" \
+                -d "$PAYLOAD")
+
+              HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+              BODY_RESP=$(echo "$RESPONSE" | head -1)
+
+              if [ "$HTTP_CODE" != "200" ]; then
+                echo "Error: HTTP $HTTP_CODE - $BODY_RESP" >&2
+                exit 1
+              fi
+            dest: /usr/local/bin/send-mail
+            mode: '0755'
+            owner: root
+            group: root
+          no_log: true
+
+        - name: Deploy mail drop-in wrapper
+          copy:
+            content: |
+              #!/bin/bash
+              # Drop-in mail replacement that routes through the email relay
+              # Compatible with: echo "body" | mail -s "subject" recipient
+
+              API_ENDPOINT="{{ relay_credentials.api_endpoint }}"
+              API_KEY="{{ relay_credentials.api_key }}"
+              FROM="{{ ansible_hostname }}@{{ domain }}"
+
+              SUBJECT=""
+              RECIPIENT=""
+
+              # Parse arguments compatible with mailutils mail command
+              while [ $# -gt 0 ]; do
+                case "$1" in
+                  -s) SUBJECT="$2"; shift 2 ;;
+                  -a) shift 2 ;;  # skip extra headers
+                  *)  RECIPIENT="$1"; shift ;;
+                esac
+              done
+
+              RECIPIENT="${RECIPIENT:-{{ recipient_email }}}"
+              BODY=$(cat)
+
+              PAYLOAD=$(jq -n \
+                --arg subject "$SUBJECT" \
+                --arg body "$BODY" \
+                --arg to "$RECIPIENT" \
+                --arg from "$FROM" \
+                '{subject: $subject, body: $body, to: $to, from: $from}')
+
+              curl -s -X POST "$API_ENDPOINT" \
+                -H "x-api-key: $API_KEY" \
+                -H "Content-Type: application/json" \
+                -d "$PAYLOAD" > /dev/null
+            dest: /usr/local/bin/mail
+            mode: '0755'
+            owner: root
+            group: root
+          no_log: true
+
+    # --- Test email (both transports provide /usr/local/bin/send-mail) ---
+
+    - name: Test email
+      shell: >
+        timeout 30
+        /usr/local/bin/send-mail "Test from {{ ansible_hostname }}" "Test email from {{ ansible_hostname }}"
+      changed_when: false
+      register: test_email
+      failed_when: test_email.rc != 0
+      ignore_errors: true

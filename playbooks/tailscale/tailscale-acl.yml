@@ -1,0 +1,114 @@
+---
+# tailscale-acl.yml - Configure Tailscale ACL policy via API
+#
+# Applies a restrictive ACL: only myserver -> vps:9100 (Prometheus scraping).
+# All other traffic between tailnet devices is denied by default.
+#
+# Prerequisites:
+#   1. Tailscale installed on both hosts (run tailscale.yml first)
+#   2. Create an API access token in the Tailscale admin console
+#      (Settings > Keys > Generate access token)
+#   3. Store it in Vault:
+#        vault kv put secret/tailscale authkey=tskey-auth-... apikey=tskey-api-...
+#
+# Usage:
+#   ansible-playbook playbooks/tailscale/tailscale-acl.yml
+
+- name: Configure Tailscale ACL policy
+  hosts: vps:myserver
+  become: true
+  gather_facts: false
+
+  vars_files:
+    - ../../vars.yml
+
+  tasks:
+    - name: Gather controller facts
+      ansible.builtin.setup:
+      delegate_to: localhost
+      delegate_facts: true
+      run_once: true
+      become: false
+
+    - name: Verify running from myserver (Vault access required)
+      ansible.builtin.assert:
+        that:
+          - myserver_ip in hostvars['localhost']['ansible_all_ipv4_addresses']
+        fail_msg: "This playbook must be run from myserver ({{ myserver_ip }}) for Vault access"
+      run_once: true
+
+    - name: Read Tailscale API key from Vault
+      ansible.builtin.command:
+        cmd: vault kv get -field=apikey secret/tailscale
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: vault_tailscale_apikey
+      no_log: true
+
+    - name: Get Tailscale IP
+      ansible.builtin.command: tailscale ip -4
+      register: tailscale_ip
+      changed_when: false
+
+    - name: Get Tailscale status
+      ansible.builtin.command: tailscale status --json
+      register: tailscale_status_json
+      changed_when: false
+
+    - name: Set Tailscale facts
+      ansible.builtin.set_fact:
+        ts_ip: "{{ tailscale_ip.stdout }}"
+        ts_hostname: "{{ (tailscale_status_json.stdout | from_json).Self.HostName }}"
+
+    - name: Display discovered identities
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ ts_hostname }} ({{ ts_ip }})"
+
+    - name: Set ACL variables
+      ansible.builtin.set_fact:
+        acl_src_host: "{{ hostvars[groups['myserver'][0]].ts_hostname }}"
+        acl_src_ip: "{{ hostvars[groups['myserver'][0]].ts_ip }}"
+        acl_dst_host: "{{ hostvars[groups['vps'][0]].ts_hostname }}"
+        acl_dst_ip: "{{ hostvars[groups['vps'][0]].ts_ip }}"
+
+    - name: Display ACL policy to apply
+      ansible.builtin.debug:
+        msg: "ACL: {{ acl_src_host }} ({{ acl_src_ip }}) -> {{ acl_dst_host }} ({{ acl_dst_ip }}):9100"
+      run_once: true
+
+    - name: Build ACL policy JSON
+      ansible.builtin.set_fact:
+        acl_policy: >-
+          {"hosts":{"{{ acl_src_host }}":"{{ acl_src_ip }}","{{ acl_dst_host }}":"{{ acl_dst_ip }}"},
+          "acls":[{"action":"accept","src":["{{ acl_src_host }}"],"dst":["{{ acl_dst_host }}:9100"]}]}
+      run_once: true
+
+    - name: Apply Tailscale ACL policy
+      ansible.builtin.command:
+        cmd: >-
+          curl -s -f -X POST
+          https://api.tailscale.com/api/v2/tailnet/-/acl
+          -H "Authorization: Bearer {{ vault_tailscale_apikey.stdout }}"
+          -H "Content-Type: application/json"
+          -d {{ acl_policy | quote }}
+      delegate_to: localhost
+      become: false
+      run_once: true
+      no_log: true
+
+    - name: Confirm ACL policy applied
+      ansible.builtin.debug:
+        msg: "Tailscale ACL applied: {{ acl_src_host }} -> {{ acl_dst_host }}:9100 (all other traffic denied)"
+      run_once: true
+
+    - name: Verify metrics endpoint is still reachable
+      ansible.builtin.uri:
+        url: "http://{{ acl_dst_ip }}:9100/metrics"
+        return_content: false
+        status_code: 200
+      delegate_to: localhost
+      become: false
+      run_once: true
+      retries: 3
+      delay: 5

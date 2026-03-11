@@ -1,0 +1,31 @@
+# Common variables for infrastructure management
+# This file is used by both Terraform and Ansible
+# Copy to vars.yml and fill in your values
+
+# AWS region for all resources
+# The S3 backend region in terraform/main.tf is hardcoded separately as backend blocks cannot use variables
+aws_region: us-east-1
+
+# Prefix for AWS resource names (e.g., myprefix-smtp-user, myprefix-traefik-dns-user)
+name_prefix: myprefix
+
+# Email address for email receiving and SES verification
+recipient_email: user@example.com
+
+# Domain name for email sending and SES verification
+domain: example.com
+
+# Route53 hosted zone ID for the domain
+route53_zone_id: Z0123456789ABCDEFGHIJ
+
+# myserver LAN IP: must match hosts.ini
+myserver_ip: 192.0.2.10
+
+# Rsync backup destination user
+rsync_backup_user: myuser
+
+# Rsync backup destination hostname
+rsync_backup_host: nas.local
+
+# S3 bucket for CloudTrail logs (created externally; Terraform manages its policies only)
+s3_logs_bucket: my-logs

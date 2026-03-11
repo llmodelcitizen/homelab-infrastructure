@@ -1,0 +1,52 @@
+---
+- name: Deploy Vault auto-unseal at boot
+  hosts: myserver
+  become: true
+
+  vars_files:
+    - ../../vars.yml
+
+  tasks:
+    - name: Verify running on myserver
+      ansible.builtin.assert:
+        that:
+          - myserver_ip in ansible_all_ipv4_addresses
+        fail_msg: "This playbook must be run on myserver ({{ myserver_ip }})"
+
+    - name: Deploy vault-auto-unseal script
+      copy:
+        src: vault-auto-unseal.sh
+        dest: /usr/local/bin/vault-auto-unseal
+        mode: "0755"
+
+    - name: Create vault-auto-unseal systemd service
+      copy:
+        content: |
+          [Unit]
+          Description=Unseal Vault at boot before Docker starts
+          After=vault.service
+          Wants=vault.service
+          Before=docker.service
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/usr/local/bin/vault-auto-unseal
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/vault-auto-unseal.service
+      notify: reload systemd
+
+    - name: Flush handlers
+      meta: flush_handlers
+
+    - name: Enable vault-auto-unseal service
+      systemd:
+        name: vault-auto-unseal.service
+        enabled: true
+
+  handlers:
+    - name: reload systemd
+      systemd:
+        daemon_reload: true

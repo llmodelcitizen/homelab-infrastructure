@@ -1,0 +1,63 @@
+---
+- name: Configure NVIDIA GPU drivers
+  hosts: myserver
+  become: true
+
+  vars_files:
+    - ../../vars.yml
+
+  tasks:
+    - name: Verify running on myserver
+      ansible.builtin.assert:
+        that:
+          - myserver_ip in ansible_all_ipv4_addresses
+        fail_msg: "This playbook must be run on myserver ({{ myserver_ip }})"
+
+    - name: Install NVIDIA driver and DKMS support
+      apt:
+        name:
+          - nvidia-driver
+          - nvidia-kernel-dkms
+          - linux-headers-amd64
+        state: present
+        update_cache: true
+
+    - name: Ensure NVIDIA kernel module is loaded
+      modprobe:
+        name: nvidia
+        state: present
+
+    - name: Verify GPU is accessible
+      command: nvidia-smi
+      changed_when: false
+      register: nvidia_smi
+      failed_when: nvidia_smi.rc != 0
+
+    - name: Install NVIDIA Container Toolkit
+      block:
+        - name: Add NVIDIA container toolkit GPG key
+          shell: curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+          args:
+            creates: /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+
+        - name: Add NVIDIA container toolkit repository
+          apt_repository:
+            repo: "deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/$(ARCH) /"
+            filename: nvidia-container-toolkit
+            state: present
+
+        - name: Install nvidia-container-toolkit
+          apt:
+            name: nvidia-container-toolkit
+            state: present
+            update_cache: true
+
+    - name: Configure Docker NVIDIA runtime
+      command: nvidia-ctk runtime configure --runtime=docker
+      changed_when: false
+
+    - name: Restart Docker to pick up NVIDIA runtime
+      systemd:
+        name: docker
+        state: restarted
+      changed_when: false

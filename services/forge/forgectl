@@ -1,0 +1,23 @@
+#!/bin/bash
+set -eo pipefail
+
+export VAULT_ADDR="http://127.0.0.1:8200"
+export VAULT_TOKEN=$(sudo age -d -i /root/.config/sops/age/keys.txt /root/.vault-credentials.age) || { echo "Error: failed to decrypt Vault token" >&2; exit 1; }
+vault token lookup > /dev/null 2>&1 || { echo "Error: Vault is sealed or not authenticated" >&2; exit 1; }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VARS_FILE="$SCRIPT_DIR/../../vars.yml"
+
+# Read domain from vars.yml and construct forge subdomain
+BASE_DOMAIN=$(grep '^domain:' "$VARS_FILE" | awk '{print $2}')
+export DOMAIN="forge.${BASE_DOMAIN}"
+
+# Fetch secrets from Vault
+SECRETS=$(vault kv get -format=json secret/forge | jq -r '.data.data')
+
+export FORGEJO_DB_PASSWORD=$(echo "$SECRETS" | jq -r '.db_password')
+export FORGEJO_SECRET_KEY=$(echo "$SECRETS" | jq -r '.secret_key')
+export FORGEJO_INTERNAL_TOKEN=$(echo "$SECRETS" | jq -r '.internal_token')
+
+# Pass through to docker compose
+exec docker compose "$@"

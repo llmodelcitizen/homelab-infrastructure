@@ -1,0 +1,37 @@
+#!/bin/bash
+set -eo pipefail
+
+export VAULT_ADDR="http://127.0.0.1:8200"
+export VAULT_TOKEN=$(sudo age -d -i /root/.config/sops/age/keys.txt /root/.vault-credentials.age) || { echo "Error: failed to decrypt Vault token" >&2; exit 1; }
+vault token lookup > /dev/null 2>&1 || { echo "Error: Vault is sealed or not authenticated" >&2; exit 1; }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VARS_FILE="$SCRIPT_DIR/../../vars.yml"
+
+export AWS_REGION=$(grep '^aws_region:' "$VARS_FILE" | awk '{print $2}')
+BASE_DOMAIN=$(grep '^domain:' "$VARS_FILE" | awk '{print $2}')
+export GRAFANA_DOMAIN="grafana.${BASE_DOMAIN}"
+export PROMETHEUS_DOMAIN="prometheus.${BASE_DOMAIN}"
+export ALERTMANAGER_DOMAIN="alertmanager.${BASE_DOMAIN}"
+export CADVISOR_DOMAIN="cadvisor.${BASE_DOMAIN}"
+export DOMAIN="$BASE_DOMAIN"
+export RECIPIENT_EMAIL=$(grep '^recipient_email:' "$VARS_FILE" | awk '{print $2}')
+
+# Fetch SMTP credentials from Vault for Alertmanager and Diun
+SMTP_SECRETS=$(vault kv get -format=json secret/smtp | jq -r '.data.data')
+export SMTP_ENDPOINT=$(echo "$SMTP_SECRETS" | jq -r '.smtp_endpoint')
+export SMTP_USERNAME=$(echo "$SMTP_SECRETS" | jq -r '.smtp_username')
+export SMTP_PASSWORD=$(echo "$SMTP_SECRETS" | jq -r '.smtp_password')
+
+# Fetch CloudTrail sync credentials from Vault
+CT_SECRETS=$(vault kv get -format=json secret/cloudtrail-sync | jq -r '.data.data')
+export CT_AWS_ACCESS_KEY_ID=$(echo "$CT_SECRETS" | jq -r '.aws_access_key_id')
+export CT_AWS_SECRET_ACCESS_KEY=$(echo "$CT_SECRETS" | jq -r '.aws_secret_access_key')
+export CT_S3_BUCKET=$(echo "$CT_SECRETS" | jq -r '.s3_bucket')
+export CT_S3_PREFIX=$(echo "$CT_SECRETS" | jq -r '.s3_prefix')
+
+# Generate configs with actual values (no env substitution support)
+envsubst < "$SCRIPT_DIR/alertmanager/alertmanager.yml.template" | sudo tee /opt/grafana/alertmanager/alertmanager.yml > /dev/null
+envsubst < "$SCRIPT_DIR/diun/diun.yml.template" | sudo tee /opt/grafana/diun/diun.yml > /dev/null
+
+exec docker compose "$@"
