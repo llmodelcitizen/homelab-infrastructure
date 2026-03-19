@@ -46,6 +46,8 @@
       "targets": [
         {
           "expr": "sum(count_over_time({job=\"containerlogs\"} | json | message=\"Image update found\" [$__range]))",
+          "instant": true,
+          "range": false,
           "legendFormat": "",
           "refId": "A"
         }
@@ -81,6 +83,8 @@
       "targets": [
         {
           "expr": "sum(count_over_time({job=\"containerlogs\"} | json | message=\"Cannot get remote manifest\" [$__range]))",
+          "instant": true,
+          "range": false,
           "legendFormat": "",
           "refId": "A"
         }
@@ -116,6 +120,8 @@
       "targets": [
         {
           "expr": "sum(count_over_time({job=\"containerlogs\"} | json | message=\"Jobs completed\" [$__range]))",
+          "instant": true,
+          "range": false,
           "legendFormat": "",
           "refId": "A"
         }

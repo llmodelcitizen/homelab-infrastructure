@@ -15,7 +15,7 @@ services:
       - GF_AUTH_PROXY_AUTO_SIGN_UP_DEFAULT_ROLE=Admin
     volumes:
       - /opt/grafana/data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - /opt/grafana/provisioning:/etc/grafana/provisioning:ro
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.grafana.rule=Host(`${GRAFANA_DOMAIN}`)"
@@ -46,8 +46,8 @@ services:
       - '--web.enable-admin-api'
       - '--web.external-url=https://${PROMETHEUS_DOMAIN}'
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./prometheus/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
+      - /opt/grafana/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - /opt/grafana/prometheus/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
       - /opt/grafana/prometheus:/prometheus
     labels:
       - "traefik.enable=true"
@@ -133,13 +133,19 @@ services:
       - monitoring
 
   loki:
-    image: grafana/loki:latest
+    build: ./loki
     container_name: loki
     restart: unless-stopped
     command: -config.file=/etc/loki/loki-config.yml
     volumes:
-      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - /opt/grafana/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
       - /opt/grafana/loki:/loki
+    healthcheck:
+      test: ["CMD", "/usr/bin/busybox", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      interval: 3s
+      timeout: 3s
+      start_period: 60s
+      retries: 3
     networks:
       - monitoring
 
@@ -149,10 +155,14 @@ services:
     restart: unless-stopped
     command: -config.file=/etc/promtail/promtail-config.yml
     volumes:
-      - ./promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /opt/grafana/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
       - /var/log:/var/log:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /opt/grafana/cloudtrail/ndjson:/cloudtrail:ro
+      - /opt/grafana/promtail/data:/data
+    depends_on:
+      loki:
+        condition: service_healthy
     networks:
       - monitoring
 

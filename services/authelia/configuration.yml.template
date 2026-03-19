@@ -23,9 +23,9 @@ authentication_backend:
 
 session:
   name: authelia_session
-  inactivity: 1d
-  expiration: 1d
-  remember_me: -1
+  inactivity: 8d
+  expiration: 1y
+  remember_me: 1y
   cookies:
     - domain: '${BASE_DOMAIN}'
       authelia_url: 'https://auth.${BASE_DOMAIN}'

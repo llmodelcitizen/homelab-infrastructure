@@ -90,6 +90,8 @@
         {
           "datasource": "Loki",
           "expr": "sum(count_over_time({job=\"cloudtrail\", event_source=~\"$event_source\", event_name=~\"$event_name\", aws_region=~\"$aws_region\"} |= \"$search\" [$__range]))",
+          "instant": true,
+          "range": false,
           "refId": "A"
         }
       ],
@@ -125,6 +127,8 @@
         {
           "datasource": "Loki",
           "expr": "sum(count_over_time({job=\"cloudtrail\", error_code!=\"\"} |= \"$search\" [$__range]))",
+          "instant": true,
+          "range": false,
           "refId": "A"
         }
       ],
@@ -159,6 +163,8 @@
         {
           "datasource": "Loki",
           "expr": "count(sum by (event_source) (count_over_time({job=\"cloudtrail\", event_source=~\"$event_source\"} [$__range])))",
+          "instant": true,
+          "range": false,
           "refId": "A"
         }
       ],
@@ -193,6 +199,8 @@
         {
           "datasource": "Loki",
           "expr": "count(sum by (aws_region) (count_over_time({job=\"cloudtrail\", aws_region=~\"$aws_region\"} [$__range])))",
+          "instant": true,
+          "range": false,
           "refId": "A"
         }
       ],
@@ -378,6 +386,8 @@
         {
           "datasource": "Loki",
           "expr": "sum by (error_code) (count_over_time({job=\"cloudtrail\", error_code!=\"\"} [$__range]))",
+          "instant": true,
+          "range": false,
           "legendFormat": "{{error_code}}",
           "refId": "A"
         }
@@ -586,6 +596,8 @@
         {
           "datasource": "Loki",
           "expr": "sum by (sourceIPAddress, sourceIPOrg) (count_over_time({job=\"cloudtrail\", event_source=~\"$event_source\", event_name=~\"$event_name\", aws_region=~\"$aws_region\"} |= \"$search\" | json [$__range]))",
+          "instant": true,
+          "range": false,
           "legendFormat": "{{sourceIPAddress}} ({{sourceIPOrg}})",
           "refId": "A"
         }
@@ -690,6 +702,7 @@
         "datasource": "Loki",
         "definition": "label_values({job=\"cloudtrail\"}, event_source)",
         "hide": 0,
+        "allValue": ".*",
         "includeAll": true,
         "label": "Event Source",
         "multi": true,
@@ -707,6 +720,7 @@
         "datasource": "Loki",
         "definition": "label_values({job=\"cloudtrail\", event_source=~\"$event_source\"}, event_name)",
         "hide": 0,
+        "allValue": ".*",
         "includeAll": true,
         "label": "Event Name",
         "multi": true,
@@ -724,6 +738,7 @@
         "datasource": "Loki",
         "definition": "label_values({job=\"cloudtrail\"}, aws_region)",
         "hide": 0,
+        "allValue": ".*",
         "includeAll": true,
         "label": "Region",
         "multi": true,
